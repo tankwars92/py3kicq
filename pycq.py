@@ -41,6 +41,7 @@ rnd=random
 # Message caching
 
 MESSAGE_CACHE_FILE = 'message_cache.json'
+MESSAGE_CACHE_SCHEMA = 7
 
 USE_MESSAGE_CACHE = True
 
@@ -48,19 +49,37 @@ def load_message_cache():
     if os.path.exists(MESSAGE_CACHE_FILE):
         try:
             with open(MESSAGE_CACHE_FILE, 'r', encoding='utf-8') as f:
-                return json.load(f)
+                data = json.load(f)
+            if not isinstance(data, dict):
+                return {}
+            if data.get('_schema') != MESSAGE_CACHE_SCHEMA:
+                return {}
+            data.pop('_schema', None)
+            return data
         except Exception as e:
             print(str(e))
     return {}
 
 def save_message_cache(cache):
     try:
+        to_save = dict(cache)
+        to_save['_schema'] = MESSAGE_CACHE_SCHEMA
         with open(MESSAGE_CACHE_FILE, 'w', encoding='utf-8') as f:
-            json.dump(cache, f, ensure_ascii=False, indent=2)
+            json.dump(to_save, f, ensure_ascii=False, indent=2)
     except Exception as e:
         print(str(e))
 
 _message_cache = load_message_cache()
+
+def normalize_icq_message(s):
+  """Unify newlines so probe/cache keys match echo_bot_test and the server."""
+  if not isinstance(s, str):
+    return s
+  return s.replace('\r\n', '\n').replace('\r', '\n')
+
+PROBE_POLL_INTERVAL = 0.02
+PROBE_POLL_ATTEMPTS = 20
+PROBE_MAX_SPACES = 16
 
 ##############################################################################
 
@@ -383,8 +402,21 @@ class pycq:
   
   ############################################################################
   
-  def send_message_server(self,receiver_uin,message):
+  def send_message_server(self,receiver_uin,message,probe_message=True):
     global _message_cache
+
+    message = normalize_icq_message(message)
+
+    if not probe_message:
+      self.A.receiver_uin = receiver_uin
+      self.A.message_type = 1
+      self.A.message_text = message
+      try:
+        packet = self.UDP_CMD(UDP_CMD_SEND_MESSAGE)
+        self.UDP_send(packet)
+      except Exception:
+        pass
+      return
 
     if USE_MESSAGE_CACHE and message in _message_cache:
       spaces_needed = _message_cache[message]
@@ -403,16 +435,17 @@ class pycq:
     if self.test_bot_enabled and self.test_uin:
       original_message = message
 
-      try:
-        with open('test_results.txt', 'w', encoding='utf-8') as f:
-          f.write('')
-      except:
-        pass
-
       working_spaces = None
 
-      for spaces in range(5):
+      for spaces in range(PROBE_MAX_SPACES):
         test_message = message + (" " * spaces)
+
+        try:
+          with open('test_results.txt', 'w', encoding='utf-8') as f:
+            f.write('')
+            f.flush()
+        except Exception:
+          pass
 
         self.A.receiver_uin = self.test_uin
         self.A.message_type = 1
@@ -422,19 +455,21 @@ class pycq:
           test_packet = self.UDP_CMD(UDP_CMD_SEND_MESSAGE)
           self.UDP_send(test_packet)
 
-          time.sleep(0.5)
-
-          try:
-            with open('test_results.txt', 'r', encoding='utf-8') as f:
-              content = f.read()
-              expected = f"RECEIVED:{self.my_uin}:{test_message}"
+          expected = f"RECEIVED:{self.my_uin}:{test_message}"
+          for _ in range(PROBE_POLL_ATTEMPTS):
+            time.sleep(PROBE_POLL_INTERVAL)
+            try:
+              with open('test_results.txt', 'r', encoding='utf-8') as f:
+                content = f.read()
               if expected in content:
                 working_spaces = spaces
                 break
-          except:
-            pass
+            except Exception:
+              pass
+          if working_spaces is not None:
+            break
 
-        except Exception as e:
+        except Exception:
           continue
 
       if working_spaces is not None:
@@ -444,9 +479,6 @@ class pycq:
         final_message = original_message + (" " * working_spaces)
       else:
         final_message = original_message
-        if USE_MESSAGE_CACHE:
-          _message_cache[original_message] = 0
-          save_message_cache(_message_cache)
     else:
       final_message = message
 

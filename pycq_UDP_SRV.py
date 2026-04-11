@@ -19,7 +19,7 @@
 # Foundation, Inc., 675 Mass Ave, Cambridge, MA 02139, USA.
 #
 
-import string,re
+import string,re,unicodedata
 from pycq_def import *
 
 server_packets="""
@@ -270,15 +270,37 @@ def __U16(s,offset=0):
 def __U8(s,offset=0):
   return offset+1, s[offset]
 
+def _repair_utf8_misread_as_latin1(s):
+  try:
+    fixed = s.encode('latin-1').decode('utf-8')
+  except UnicodeError:
+    return s
+  def cyr(x):
+    return sum(1 for c in x if '\u0400' <= c <= '\u04ff')
+  if cyr(fixed) > cyr(s):
+    return unicodedata.normalize('NFC', fixed)
+  return s
+
+def _decode_icq_text_bytes(raw_bytes):
+  if raw_bytes.startswith(b'\xef\xbb\xbf'):
+    raw_bytes = raw_bytes[3:]
+  if not raw_bytes:
+    return ''
+  try:
+    text = raw_bytes.decode('utf-8')
+  except UnicodeDecodeError:
+    text = raw_bytes.decode('cp1251', errors='replace')
+  text = unicodedata.normalize('NFC', text)
+  return _repair_utf8_misread_as_latin1(text)
+
 def __STR(s,offset=0):
   offset+=2
   start=offset
   while s[offset]:
     offset += 1
   raw_bytes = s[start:offset]
-
-  cp1251_result = raw_bytes.decode('cp1251', errors='replace')
-  return offset+1, cp1251_result
+  text = _decode_icq_text_bytes(raw_bytes)
+  return offset+1, text
 
 def __IP(s,offset=0):
   return offset+4, "%d"%s[offset] + ".%d"%s[offset+1] + ".%d"%s[offset+2] + ".%d"%s[offset+3]

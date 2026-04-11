@@ -20,7 +20,7 @@
 #
 
 
-import string,re
+import string,re,unicodedata
 
 command_packets="""            
 
@@ -301,8 +301,29 @@ def _U32(u32):
 def _U16(u32):
   return bytes([u32 & 0xff, (u32 & 0xff00)>>8])
 
+OUTGOING_TEXT_ENCODING = 'cp1251'
+OUTGOING_UTF8_BOM = False
+
 def _STR(str):
-  encoded = str.encode('cp1251')
+  try:
+    encoded = str.encode('cp1251')
+  except UnicodeEncodeError:
+    encoded = str.encode('utf-8')
+  return _U16(len(encoded)+1) + encoded + bytes([0])
+
+def _MSG_STR(str):
+  t = unicodedata.normalize('NFC', str)
+  if OUTGOING_TEXT_ENCODING == 'utf-8':
+    encoded = t.encode('utf-8')
+    if OUTGOING_UTF8_BOM:
+      encoded = b'\xef\xbb\xbf' + encoded
+  elif OUTGOING_TEXT_ENCODING == 'cp1251':
+    try:
+      encoded = t.encode('cp1251')
+    except UnicodeEncodeError:
+      encoded = t.encode('utf-8')
+  else:
+    encoded = t.encode(OUTGOING_TEXT_ENCODING)
   return _U16(len(encoded)+1) + encoded + bytes([0])
 
 def _U8_LIST_U32(L):
@@ -319,6 +340,7 @@ def _U8_LIST_U32(L):
 def make_functions():
   reg_exps = [
                [ re.compile(r'^\s*(NN xx xx xx xx)'),'_U8_LIST_U32'],
+               [ re.compile(r'^\s*(LL)\s+LL\s+xx\s+..\s+00(?=\s+MESSAGE_TEXT)'),'_MSG_STR'],
                [ re.compile(r'^\s*(LL)\s+LL\s+xx\s+..\s+00'),'_STR'],
                [ re.compile(r'^\s*(\w\w\s+\w\w\s+\w\w\s+\w\w)\s+'),'_U32' ],
                [ re.compile(r'^\s*(\w\w\s+\w\w)\s+'),'_U16' ],
